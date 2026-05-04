@@ -107,8 +107,8 @@ Download and run the installer from [https://ollama.com/download](https://ollama
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/pantheon.git
-cd pantheon/agent
+git clone https://github.com/alankritxghosh/Pantheon.ai.git
+cd Pantheon.ai
 
 # 2. Install dependencies
 npm install
