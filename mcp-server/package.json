@@ -1,0 +1,28 @@
+{
+  "name": "@pantheon/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Pantheon — exposes Pantheon as tools inside Claude Code and other MCP clients.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "pantheon-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "prepare": "npm run build",
+    "build": "tsc && chmod +x dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

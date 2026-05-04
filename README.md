@@ -379,6 +379,10 @@ node /path/to/pantheon/agent/dist/index.js run
 
 ---
 
+## Use Pantheon inside Claude Code
+
+A Model Context Protocol server wraps Pantheon as tools for Claude Code. See [`mcp-server/README.md`](./mcp-server/README.md) for setup.
+
 ## FAQ
 
 **Does it work without internet?**
