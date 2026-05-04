@@ -1,0 +1,27 @@
+{
+  "name": "pantheon-agent",
+  "version": "0.1.0",
+  "description": "An open-source agentic AI Product Manager. Researches, deconstructs products, writes PRDs, designs systems, plans evals, and produces decision packets.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "pantheon": "./dist/index.js"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.91.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
