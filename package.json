@@ -8,6 +8,7 @@
     "pantheon": "./dist/index.js"
   },
   "scripts": {
+    "prepare": "npm run build",
     "start": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit"

@@ -110,8 +110,8 @@ Download and run the installer from [https://ollama.com/download](https://ollama
 git clone https://github.com/alankritxghosh/Pantheon.ai.git
 cd Pantheon.ai
 
-# 2. Install dependencies
-npm install
+# 2. Install dependencies and build
+npm install   # automatically builds dist/ via prepare script
 
 # 3. (Optional) Link the CLI globally so you can run `pantheon` from anywhere
 npm link
