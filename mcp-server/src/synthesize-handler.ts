@@ -3,9 +3,9 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { parseOpportunityScorecard } from "./synthesize-summary.js";
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.PANTHEON_SYNTHESIZE_TIMEOUT_MS ?? 5 * 60 * 1000);
 
@@ -112,7 +112,7 @@ export async function handlePantheonSynthesize(args: PantheonSynthesizeArgs): Pr
   const scorecard = roundTripCitations(scorecardRaw, mappings);
   const evidenceLedger = roundTripCitations(evidenceRaw, mappings);
   const validationPassed = /Status:\s*Pass/i.test(validationRaw);
-  const ranked = await parseTopN(scorecard, args.top_n);
+  const ranked = parseTopN(scorecard, args.top_n);
 
   return {
     run_id: runId,
@@ -241,18 +241,8 @@ function escapeForRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function parseTopN(scorecard: string, topN: number): Promise<RankedOpportunity[]> {
+function parseTopN(scorecard: string, topN: number): RankedOpportunity[] {
   if (!scorecard.trim()) return [];
-  const envBin = process.env.PANTHEON_MCP_BIN;
-  if (!envBin) {
-    throw new Error(
-      "PANTHEON_MCP_BIN must point at the built Pantheon CLI (dist/index.js) so the MCP server can reuse the synthesize parser.",
-    );
-  }
-  const modulePath = path.join(path.dirname(envBin), "cli-output", "synthesize-summary.js");
-  const mod = (await import(pathToFileURL(modulePath).href)) as {
-    parseOpportunityScorecard: (md: string) => RankedOpportunity[];
-  };
-  const ranked = mod.parseOpportunityScorecard(scorecard);
+  const ranked = parseOpportunityScorecard(scorecard);
   return ranked.slice(0, topN);
 }
