@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createRun, getRun, listRuns } from "./runs.js";
 import {
   readArtifactContent,
+  runPantheonLearnStyle,
   startPantheonRun,
   summarizeArtifacts,
   summarizeValidation,
@@ -14,6 +15,17 @@ export const PantheonRunInput = z.object({
     .describe(
       "Absolute path to the directory Pantheon should run on. Must exist. Pantheon will recursively scan supported text files (.md, .txt, .csv, .tsv, .json) and write outputs to <directory>/pantheon-output/.",
     ),
+});
+
+export const PantheonLearnStyleInput = z.object({
+  input_dir: z
+    .string()
+    .describe("Relative or absolute path to a folder of example product docs to learn from."),
+  workdir: z
+    .string()
+    .optional()
+    .describe("Directory where .pantheon/style.json and .pantheon/style-index.json will be written. Defaults to the MCP server current working directory."),
+  company: z.string().optional().describe("Optional company or team name to store in the learned style profile."),
 });
 
 export const PantheonPacketInput = z.object({
@@ -65,6 +77,37 @@ export async function handlePantheonRun(args: z.infer<typeof PantheonRunInput>) 
     workspace: state.workspace,
     logFile: state.logFile,
     note: "Pantheon run started in background. Poll pantheon_status for progress. Typical duration: 25-35 minutes on default model.",
+  };
+}
+
+export async function handlePantheonLearnStyle(args: z.infer<typeof PantheonLearnStyleInput>) {
+  const fs = await import("node:fs/promises");
+  const workdir = path.resolve(args.workdir ?? process.cwd());
+  const inputDir = path.resolve(workdir, args.input_dir);
+
+  const [workdirStat, inputStat] = await Promise.all([fs.stat(workdir), fs.stat(inputDir)]);
+  if (!workdirStat.isDirectory()) throw new Error(`Not a directory: ${workdir}`);
+  if (!inputStat.isDirectory()) throw new Error(`Not a directory: ${inputDir}`);
+
+  const result = await runPantheonLearnStyle(inputDir, workdir, args.company);
+  const stylePath = path.join(workdir, ".pantheon", "style.json");
+  const indexPath = path.join(workdir, ".pantheon", "style-index.json");
+  const profile = JSON.parse(await fs.readFile(stylePath, "utf8")) as {
+    artifactStyles: Record<string, { sections: string[]; examples: string[] }>;
+  };
+  const learnedStyles = Object.entries(profile.artifactStyles)
+    .map(([slug, style]) => `${slug}: ${style.sections.join(" > ")} (${style.examples.length} example${style.examples.length === 1 ? "" : "s"})`)
+    .sort();
+
+  return {
+    status: "completed",
+    inputDir,
+    workdir,
+    stylePath,
+    indexPath,
+    learnedStyles,
+    summary: `Learned ${learnedStyles.length} artifact style${learnedStyles.length === 1 ? "" : "s"}.`,
+    log: result.stderr.trim(),
   };
 }
 

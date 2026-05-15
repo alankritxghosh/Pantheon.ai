@@ -8,20 +8,37 @@ import {
 import { zodToJsonSchema } from "zod-to-json-schema";
 import {
   handlePantheonCritique,
+  handlePantheonLearnStyle,
   handlePantheonListRuns,
   handlePantheonPacket,
   handlePantheonReadArtifact,
   handlePantheonRun,
   handlePantheonStatus,
   PantheonCritiqueInput,
+  PantheonLearnStyleInput,
   PantheonListRunsInput,
   PantheonPacketInput,
   PantheonReadArtifactInput,
   PantheonRunInput,
   PantheonStatusInput,
 } from "./tools.js";
+import { handlePantheonSynthesize, PantheonSynthesizeInput } from "./synthesize-handler.js";
 
 const TOOLS = [
+  {
+    name: "pantheon_synthesize",
+    description:
+      "Synthesize raw evidence blobs into a ranked, cited opportunity list. Use this when the user wants to know what to build or work on next, given content gathered from any source (Linear tickets, Slack threads, Granola/Gong transcripts, Notion pages, manual notes). No folder required: pass evidence inline as { name, content, source_type? }. Returns ranked_opportunities with citations preserved back to your provided names.",
+    schema: PantheonSynthesizeInput,
+    handler: handlePantheonSynthesize,
+  },
+  {
+    name: "learn-style",
+    description:
+      "Ingest a folder of example product docs and extract a StyleProfile to .pantheon/style.json. Use this before pantheon_run when generating in a specific team's house style.",
+    schema: PantheonLearnStyleInput,
+    handler: handlePantheonLearnStyle,
+  },
   {
     name: "pantheon_run",
     description:

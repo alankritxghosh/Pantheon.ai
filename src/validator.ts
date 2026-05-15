@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { loadStyleProfile, slugForFilename, type StyleProfile } from "./style/style-profile.js";
 
 export const STANDARD_PACKET_ARTIFACTS = [
   "evidence-ledger.md",
@@ -26,6 +27,7 @@ const RAW_OUTPUT = "raw-output.md";
 export interface ValidationOptions {
   invalidArtifactNames?: string[];
   allowedExtraMarkdownFiles?: string[];
+  requiredArtifacts?: readonly string[];
 }
 
 export interface ArtifactCheck {
@@ -54,13 +56,15 @@ export async function validateRunFolder(
 ): Promise<ValidationResult> {
   const entries = await fs.readdir(workdir);
   const files = entries.filter((entry) => entry.endsWith(".md")).sort();
+  const styleProfile = await loadStyleProfile(resolveStyleWorkdir(workdir));
   const invalidOnDisk = files.filter((entry) => !isFlatMarkdownFilename(entry));
   const invalidArtifactNames = [
     ...new Set([...(options.invalidArtifactNames ?? []), ...invalidOnDisk]),
   ].sort();
 
   const checks: ArtifactCheck[] = [];
-  for (const filename of STANDARD_PACKET_ARTIFACTS) {
+  const requiredArtifacts = options.requiredArtifacts ?? STANDARD_PACKET_ARTIFACTS;
+  for (const filename of requiredArtifacts) {
     const filepath = path.join(workdir, filename);
     const check: ArtifactCheck = {
       filename,
@@ -75,7 +79,7 @@ export async function validateRunFolder(
     }
 
     const content = await fs.readFile(filepath, "utf8");
-    checks.push(validateArtifactContent(filename, content));
+    checks.push(validateArtifactContent(filename, content, styleValidationOptions(filename, styleProfile)));
   }
 
   const missingArtifacts = checks
@@ -95,6 +99,8 @@ export async function validateRunFolder(
     passed,
     decisionPacketWords,
     allowedExtraMarkdownFiles: options.allowedExtraMarkdownFiles ?? [],
+    styleAware: styleProfile !== null,
+    requiredArtifacts,
   });
   const reportPath = path.join(workdir, VALIDATION_REPORT);
   await fs.writeFile(reportPath, report, "utf8");
@@ -111,11 +117,16 @@ export async function validateRunFolder(
   };
 }
 
-export async function validateArtifactFile(workdir: string, filename: string): Promise<ArtifactCheck> {
+export async function validateArtifactFile(
+  workdir: string,
+  filename: string,
+  styleAware = false,
+  requiredSections: string[] = [],
+): Promise<ArtifactCheck> {
   const filepath = path.join(workdir, filename);
   try {
     const content = await fs.readFile(filepath, "utf8");
-    return validateArtifactContent(filename, content);
+    return validateArtifactContent(filename, content, { styleAware, requiredSections });
   } catch {
     return { filename, exists: false, failures: ["missing"] };
   }
@@ -163,7 +174,16 @@ ${modelReview}`,
   );
 }
 
-export function validateArtifactContent(filename: string, content: string): ArtifactCheck {
+interface ArtifactContentValidationOptions {
+  styleAware?: boolean;
+  requiredSections?: string[];
+}
+
+export function validateArtifactContent(
+  filename: string,
+  content: string,
+  options: ArtifactContentValidationOptions = {},
+): ArtifactCheck {
   const check: ArtifactCheck = {
     filename,
     exists: true,
@@ -172,6 +192,10 @@ export function validateArtifactContent(filename: string, content: string): Arti
     headings: countMarkdownHeadings(content),
     words: countWords(content),
   };
+
+  if (options.styleAware) {
+    requireStyledStructure(check, content, options.requiredSections ?? []);
+  }
 
   if (filename === "decision-packet.md") {
     if ((check.words ?? 0) > DECISION_PACKET_WORD_LIMIT) {
@@ -185,7 +209,7 @@ export function validateArtifactContent(filename: string, content: string): Arti
       ["ask", "asks"],
       ["next decision"],
     ]);
-  } else if ((check.nonEmptyLines ?? 0) < MIN_NON_EMPTY_LINES || (check.headings ?? 0) < MIN_HEADINGS) {
+  } else if (!options.styleAware && ((check.nonEmptyLines ?? 0) < MIN_NON_EMPTY_LINES || (check.headings ?? 0) < MIN_HEADINGS)) {
     check.failures.push(
       `too shallow: ${check.nonEmptyLines} non-empty lines and ${check.headings} headings; floor is ${MIN_NON_EMPTY_LINES} lines and ${MIN_HEADINGS} headings`,
     );
@@ -193,7 +217,7 @@ export function validateArtifactContent(filename: string, content: string): Arti
 
   if (filename === "evidence-ledger.md") {
     requireSignals(check, content, [
-      ["confirmed"],
+      ["confirmed", "confirmed evidence", "direct source", "[source:"],
       ["inference"],
       ["assumption"],
       ["evidence gap", "evidence gaps", "data needed"],
@@ -239,14 +263,18 @@ function renderValidationReport(args: {
   passed: boolean;
   decisionPacketWords: number | null;
   allowedExtraMarkdownFiles: string[];
+  styleAware: boolean;
+  requiredArtifacts: readonly string[];
 }): string {
   const allowedExtraMarkdownFiles = new Set(args.allowedExtraMarkdownFiles);
+  const requiredSet = new Set<string>(args.requiredArtifacts);
   const failedChecks = args.checks.filter((check) => check.failures.length > 0);
   const extraFiles = args.files.filter(
     (file) =>
       !STANDARD_PACKET_ARTIFACTS.includes(file as (typeof STANDARD_PACKET_ARTIFACTS)[number]) &&
       file !== VALIDATION_REPORT &&
       file !== RAW_OUTPUT &&
+      !(args.styleAware && file === "style-report.md") &&
       !allowedExtraMarkdownFiles.has(file),
   );
 
@@ -258,7 +286,7 @@ function renderValidationReport(args: {
 ## Summary
 
 - Folder: \`${args.workdir}\`
-- Required artifacts: ${STANDARD_PACKET_ARTIFACTS.length}
+- Required artifacts: ${requiredSet.size}
 - Failed artifact checks: ${failedChecks.length}
 - Invalid artifact filenames: ${args.invalidArtifactNames.length}
 - Decision packet words: ${args.decisionPacketWords ?? "missing"}
@@ -286,7 +314,7 @@ ${extraFiles.length === 0 ? "- None" : extraFiles.map((name) => `- \`${name}\``)
 ## Validation Rules
 
 - Standard packet artifacts must all be present.
-- Every standard artifact except \`decision-packet.md\` must have at least ${MIN_NON_EMPTY_LINES} non-empty lines and ${MIN_HEADINGS} markdown headings.
+- Every standard artifact except \`decision-packet.md\` must have at least ${MIN_NON_EMPTY_LINES} non-empty lines and ${MIN_HEADINGS} markdown headings unless a learned style profile applies to that artifact.
 - \`decision-packet.md\` must be at or under ${DECISION_PACKET_WORD_LIMIT} words.
 - Artifact filenames must be flat Markdown filenames with no folders or path separators.
 `;
@@ -315,6 +343,57 @@ function requireSignals(check: ArtifactCheck, content: string, termGroups: strin
   }
 }
 
+function requireStyledStructure(check: ArtifactCheck, content: string, requiredSections: string[]): void {
+  if ((check.nonEmptyLines ?? 0) === 0) {
+    check.failures.push("empty artifact");
+  }
+  if ((check.headings ?? 0) === 0) {
+    check.failures.push("missing markdown headings");
+  }
+
+  const actualSections = extractH2Sections(content);
+  let lastIndex = -1;
+  const missing: string[] = [];
+  const outOfOrder: string[] = [];
+  for (const section of requiredSections) {
+    const index = actualSections.findIndex((actual) => normalizeSection(actual) === normalizeSection(section));
+    if (index === -1) {
+      missing.push(section);
+      continue;
+    }
+    if (index <= lastIndex) {
+      outOfOrder.push(section);
+      continue;
+    }
+    lastIndex = index;
+  }
+
+  if (missing.length > 0) {
+    check.failures.push(`missing required style sections: ${missing.join(", ")}`);
+  }
+  if (outOfOrder.length > 0) {
+    check.failures.push(`required style sections out of order: ${outOfOrder.join(", ")}`);
+  }
+}
+
+function extractH2Sections(content: string): string[] {
+  return content
+    .split(/\r?\n/)
+    .map((line) => /^##\s+(.+?)\s*#*\s*$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => match[1].trim());
+}
+
+function styleValidationOptions(filename: string, profile: StyleProfile | null): ArtifactContentValidationOptions {
+  const slug = slugForFilename(filename);
+  const artifactStyle = slug ? profile?.artifactStyles[slug] : undefined;
+  return artifactStyle ? { styleAware: true, requiredSections: artifactStyle.sections } : {};
+}
+
+function normalizeSection(section: string): string {
+  return section.trim().toLowerCase();
+}
+
 function findStaleCurrentModelReferences(content: string): string[] {
   const stalePatterns = [
     /claude\s+3\.5(?:\s+sonnet)?/gi,
@@ -332,4 +411,18 @@ function findStaleCurrentModelReferences(content: string): string[] {
     }
   }
   return hits;
+}
+
+function resolveStyleWorkdir(workdir: string): string {
+  const resolved = path.resolve(workdir);
+  if (
+    path.basename(path.dirname(path.dirname(resolved))) === "pantheon-output" &&
+    path.basename(path.dirname(resolved)) === "runs"
+  ) {
+    return path.dirname(path.dirname(path.dirname(resolved)));
+  }
+  if (path.basename(path.dirname(resolved)) === "pantheon-output" && path.basename(resolved) === "latest") {
+    return path.dirname(path.dirname(resolved));
+  }
+  return resolved;
 }

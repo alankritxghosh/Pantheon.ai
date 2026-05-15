@@ -2,7 +2,7 @@
 
 **The folder is the prompt.**
 
-Pantheon is an open-source CLI that turns a messy folder of product context into a complete, rigorous product packet — PRD, system design, competitive analysis, eval plan, launch plan, decision packet, and more — with every claim traced back to a specific file in your workspace.
+Pantheon is an open-source, local-first product intelligence CLI that turns a messy folder of product context into a complete, rigorous product packet — PRD, system design, competitive analysis, eval plan, launch plan, decision packet, and more — with every claim traced back to a specific file in your workspace.
 
 No forms. No chat interface. No copy-pasting context into a box. You `cd` into your folder and run one command.
 
@@ -11,9 +11,40 @@ cd ~/my-product-context
 pantheon run
 ```
 
-Thirteen structured Markdown artifacts land in `pantheon-output/latest/`. Every assertion cites its source file. Anything the model cannot ground in evidence is explicitly labelled as an `Assumption` or `Evidence gap` — not silently hallucinated.
+Pantheon first extracts deterministic evidence cards from your files, then synthesizes the product packet from that evidence layer. Thirteen structured Markdown artifacts land in `pantheon-output/latest/`. Every assertion cites its source file. Anything the model cannot ground in evidence is explicitly labelled as an `Assumption` or `Evidence gap` — not silently hallucinated.
 
 Runs entirely locally via [Ollama](https://ollama.com). No data leaves your machine. No API key required by default. Works offline once the model is pulled.
+
+---
+
+## Prerequisites
+
+- Node.js 20+
+- [Ollama](https://ollama.com) installed and running locally for the default private/local workflow
+- Pull the style embedding model: `ollama pull nomic-embed-text`
+- Pull at least one generation model: `ollama pull llama3.2`
+- Or set an API key for a remote provider: `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
+
+Run `pantheon doctor` after install to verify your setup is ready.
+
+## What's new in v2
+
+Pantheon can now learn the shape of your team's existing docs and use that style during generation. Run `pantheon learn-style <dir>` with a folder of Markdown or text examples, optionally adding `--company "Your Company"`, and Pantheon writes a hand-editable `.pantheon/style.json` profile plus a regenerable `.pantheon/style-index.json` vector index.
+
+Styled runs detect `.pantheon/`, retrieve the nearest examples for each artifact, and override Pantheon's default section structure with the learned format. That means the same context can generate as an Amazon-style 6-pager, a Google-style design doc, or a short YC-style RFC.
+
+Styled runs also write `style-report.md` beside the generated artifacts, scoring how closely each artifact matched the learned section structure, length, voice, diagrams, and code-block conventions. See [`DEMO.md`](./DEMO.md) for a 3-minute walkthrough and [`CHANGELOG.md`](./CHANGELOG.md) for the v2.0.0 release notes.
+
+## Quickstart (no setup, see Pantheon in action)
+
+The repo includes pre-generated demo workspaces with `.pantheon/` profiles already populated. After installing the CLI, run:
+
+```bash
+cd test-fixtures/demo-context-google
+pantheon run
+```
+
+Try `test-fixtures/demo-context-amazon` or `test-fixtures/demo-context-yc` to see the same Conduit context generated in different house styles.
 
 ---
 
@@ -66,7 +97,7 @@ Each artifact is a real Markdown document with a `> Status:` header and a TL;DR.
 
 ---
 
-## Prerequisites
+## Detailed local setup
 
 ### 1. Node.js 20+
 
@@ -82,7 +113,7 @@ nvm install 20 && nvm use 20
 
 ### 2. Ollama
 
-Ollama is the local model runtime Pantheon uses by default. Install it once and Pantheon handles everything else — including pulling the model on first run.
+Ollama is the local model runtime Pantheon uses by default. Install it once, start the daemon, and pull the models you want to use.
 
 **macOS**
 ```bash
@@ -99,7 +130,12 @@ ollama serve
 **Windows**
 Download and run the installer from [https://ollama.com/download](https://ollama.com/download). The installer starts the daemon automatically.
 
-> **Note:** You do not need to pull a model manually. Pantheon detects whether the requested model is on your device and pulls it automatically on first run before starting the workflow.
+Pull the default local generation model and the v2 style embedding model:
+
+```bash
+ollama pull qwen3:14b
+ollama pull nomic-embed-text
+```
 
 ---
 
@@ -108,7 +144,7 @@ Download and run the installer from [https://ollama.com/download](https://ollama
 ```bash
 # 1. Clone the repository
 git clone https://github.com/alankritxghosh/Pantheon.ai.git
-cd Pantheon.ai
+cd Pantheon.ai/agent
 
 # 2. Install dependencies and build
 npm install   # automatically builds dist/ via prepare script
@@ -125,7 +161,7 @@ node /path/to/pantheon/agent/dist/index.js run
 
 ---
 
-## Quickstart
+## Quickstart (your own workspace)
 
 ```bash
 # Navigate to any folder with product context
@@ -195,7 +231,7 @@ pantheon -f brief.md --out ./runs/my-run
 ### Explicit provider override
 
 ```bash
-pantheon run --provider ollama --model qwen2.5:32b
+pantheon run --provider ollama --model qwen3:30b
 pantheon run --provider claude-cli
 pantheon run --provider gemini-cli
 pantheon run --provider openai-cli
@@ -205,19 +241,19 @@ pantheon run --provider openai-cli
 
 ## Models and hardware
 
-Pantheon defaults to `qwen2.5:14b` running locally via Ollama. Choose a tier that fits your hardware:
+Pantheon defaults to `qwen3:14b` running locally via Ollama. Choose a tier that fits your hardware:
 
 | Alias | Model | RAM needed | Speed | Quality |
 | --- | --- | --- | --- | --- |
 | `fast` | `qwen2.5:7b` | 8–16 GB | ~15–20 min/run | Good for drafts |
-| `default` / `local` | `qwen2.5:14b` | 16–24 GB | ~25–35 min/run | Strong default |
-| `best` | `qwen2.5:32b` | 32–48 GB | ~45–60 min/run | Near-frontier quality |
-| `flagship` | `qwen2.5:72b` | 64 GB+ unified / 48 GB+ VRAM | ~90–120 min/run | Maximum quality |
+| `default` / `local` | `qwen3:14b` | 16–24 GB | ~20–35 min/run | Recommended local beta default |
+| `best` | `qwen3:30b` | 32–48 GB | ~35–60 min/run | Stronger technical synthesis |
+| `flagship` | `qwen3-coder:30b` | 32–48 GB | ~35–60 min/run | Best local coding/technical-doc path |
 
 You can also pass any Ollama model tag directly:
 
 ```bash
-pantheon run --model qwen2.5:14b-instruct-q4_K_M
+pantheon run --model qwen3:14b
 pantheon run --model mistral-nemo:12b
 OLLAMA_MODEL=llama3.3:70b pantheon run
 ```
@@ -270,9 +306,16 @@ Pantheon loads `.env` in this order: current folder → `~/.pantheon/.env` → p
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PANTHEON_PROVIDER` | `ollama` | Provider: `ollama`, `anthropic`, `claude-cli`, `openai-cli`, `gemini-cli` |
-| `PANTHEON_MODEL` | `qwen2.5:14b` | Model name or alias |
+| `PANTHEON_MODEL` | `qwen3:14b` | Model name or alias |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama daemon URL |
 | `OLLAMA_MODEL` | — | Override model for Ollama provider |
+| `PANTHEON_OLLAMA_NUM_CTX` | `16384` | Ollama context window used for generation requests |
+| `PANTHEON_OLLAMA_CALL_TIMEOUT_MS` | `900000` | Per-call Ollama timeout in milliseconds |
+| `PANTHEON_OLLAMA_FIRST_TOKEN_TIMEOUT_MS` | `360000` | First streamed-token timeout for Ollama generation requests |
+| `PANTHEON_EVIDENCE_ENRICHMENT` | `off` | Optional model clustering for deterministic evidence cards (`off` or `on`) |
+| `PANTHEON_ARTIFACT_MODEL_MODE` | `polish` | Artifact generation mode: model-polished artifacts (`polish`) or deterministic fallbacks (`off`) |
+| `PANTHEON_EMBED_PROVIDER` | `ollama` | Style embedding provider: `ollama`, `openai`, or `anthropic` (not yet supported) |
+| `OPENAI_API_KEY` | — | Required only for OpenAI embeddings or OpenAI CLI workflows |
 | `ANTHROPIC_API_KEY` | — | Required only for `provider=anthropic` |
 | `ANTHROPIC_MODEL` | `claude-opus-4-7` | Model override for Anthropic provider |
 | `OPENAI_MODEL` | — | Model override for `openai-cli` |
@@ -307,7 +350,6 @@ pantheon run
     │   │
     │   ├── artifacts.ts   — artifact specs: filename, purpose, required sections, dependencies
     │   ├── ollama-agent.ts — Ollama HTTP adapter (auto-pull, single-artifact mode)
-    │   ├── nvidia-agent.ts — NVIDIA NIM API adapter
     │   ├── agent.ts       — Anthropic SDK adapter (native tool use)
     │   ├── cli-agent.ts   — shell-out adapter for claude/openai/gemini CLIs
     │   └── validator.ts   — deterministic quality checks, report generation
@@ -336,7 +378,6 @@ agent/
 │   ├── pipeline.ts        — artifact generation loop
 │   ├── artifacts.ts       — artifact specifications
 │   ├── ollama-agent.ts    — local Ollama adapter
-│   ├── nvidia-agent.ts    — NVIDIA NIM API adapter
 │   ├── agent.ts           — Anthropic SDK adapter
 │   ├── cli-agent.ts       — CLI shell-out adapter
 │   ├── workspace.ts       — folder scanning and context building
@@ -383,6 +424,17 @@ node /path/to/pantheon/agent/dist/index.js run
 
 A Model Context Protocol server wraps Pantheon as tools for Claude Code. See [`mcp-server/README.md`](./mcp-server/README.md) for setup.
 
+## Troubleshooting
+
+Run `pantheon doctor` for a full readiness check. It tells you exactly what's missing and how to fix it. Common issues it catches:
+
+- Ollama not running (fix: `ollama serve`)
+- Generation model not pulled (fix: `ollama pull <model>`)
+- Embedding model not pulled (fix: `ollama pull nomic-embed-text`)
+- Missing API keys for hosted providers (fix: set the relevant env var)
+
+`pantheon run` also invokes the same readiness check before doing any work, so failures are caught in seconds with no orphan output folders.
+
 ## FAQ
 
 **Does it work without internet?**
@@ -398,7 +450,7 @@ V1 ingests text-based files only. Unsupported files (PDFs, Word docs, images) ar
 Yes. Use `--provider anthropic` (requires `ANTHROPIC_API_KEY`), `--provider claude-cli`, `--provider openai-cli`, or `--provider gemini-cli`. The default is local Ollama for privacy and offline capability.
 
 **How long does a full run take?**
-Roughly 25–35 minutes on `qwen2.5:14b` (default). The 13 artifacts are generated sequentially because later ones depend on earlier ones — parallelising would break the evidence chain. Faster models (7B) cut this to ~15–20 minutes; stronger models (32B, 72B) take 45–120 minutes.
+Roughly 20–35 minutes on `qwen3:14b` (default), depending on hardware and workspace size. The pipeline keeps the evidence ledger first, then uses compact dependency context for later artifacts to reduce repeated prompt cost. `qwen2.5:7b` is faster for drafts; `qwen3:30b` and `qwen3-coder:30b` improve technical quality on larger-memory machines.
 
 **What's the quality like on smaller models?**
 Models below ~7B parameters struggle with Pantheon's strict artifact-delimiter format and structured-output requirements. `qwen2.5:7b` is the minimum recommended size. Smaller models like `llama3.2:3b` will produce content but the delimiter parsing often fails, requiring multiple repair passes.

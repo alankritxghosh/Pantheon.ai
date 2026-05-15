@@ -3,7 +3,20 @@ import path from "path";
 
 export const PANTHEON_OUTPUT_DIR = "pantheon-output";
 
-const SUPPORTED_EXTENSIONS = new Set([".md", ".txt", ".csv", ".tsv", ".json"]);
+const SUPPORTED_EXTENSIONS = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".csv",
+  ".tsv",
+  ".json",
+  ".sql",
+  ".log",
+  ".yaml",
+  ".yml",
+  ".html",
+  ".xml",
+]);
 const EXCLUDED_DIRS = new Set([
   PANTHEON_OUTPUT_DIR,
   ".git",
@@ -25,15 +38,30 @@ const EXCLUDED_FILES = new Set([".DS_Store"]);
 const MAX_FILE_BYTES = Number(process.env.PANTHEON_MAX_CONTEXT_FILE_BYTES ?? 250_000);
 const MAX_TOTAL_CHARS = Number(process.env.PANTHEON_MAX_CONTEXT_CHARS ?? 220_000);
 
-interface ContextFile {
+export interface ContextFile {
   relativePath: string;
   bytes: number;
   content: string;
 }
 
-interface SkippedFile {
+export interface SkippedFile {
   relativePath: string;
   reason: string;
+}
+
+export interface FileDiscoveryOptions {
+  supportedExtensions?: Set<string>;
+  unsupportedReason?: string;
+  maxFileBytes?: number;
+  maxTotalChars?: number;
+}
+
+export interface FileDiscoveryResult {
+  supportedFiles: ContextFile[];
+  skippedFiles: SkippedFile[];
+  unsupportedFiles: SkippedFile[];
+  totalBytes: number;
+  totalChars: number;
 }
 
 export interface WorkspaceContext {
@@ -52,6 +80,23 @@ export interface WorkspaceOutputPaths {
 }
 
 export async function buildWorkspaceContext(workspaceDir: string): Promise<WorkspaceContext> {
+  const discovery = await discoverWorkspaceFiles(workspaceDir, {
+    supportedExtensions: SUPPORTED_EXTENSIONS,
+    unsupportedReason: "unsupported file type in V1 text-first ingestion",
+    maxFileBytes: MAX_FILE_BYTES,
+    maxTotalChars: MAX_TOTAL_CHARS,
+  });
+  return { workspaceDir, ...discovery };
+}
+
+export async function discoverWorkspaceFiles(
+  workspaceDir: string,
+  options: FileDiscoveryOptions = {},
+): Promise<FileDiscoveryResult> {
+  const supportedExtensions = options.supportedExtensions ?? SUPPORTED_EXTENSIONS;
+  const unsupportedReason = options.unsupportedReason ?? "unsupported file type";
+  const maxFileBytes = options.maxFileBytes ?? MAX_FILE_BYTES;
+  const maxTotalChars = options.maxTotalChars ?? MAX_TOTAL_CHARS;
   const supportedFiles: ContextFile[] = [];
   const skippedFiles: SkippedFile[] = [];
   const unsupportedFiles: SkippedFile[] = [];
@@ -76,30 +121,30 @@ export async function buildWorkspaceContext(workspaceDir: string): Promise<Works
       if (EXCLUDED_FILES.has(entry.name)) continue;
 
       const ext = path.extname(entry.name).toLowerCase();
-      if (!SUPPORTED_EXTENSIONS.has(ext)) {
-        unsupportedFiles.push({ relativePath, reason: "unsupported file type in V1 text-first ingestion" });
+      if (!supportedExtensions.has(ext)) {
+        unsupportedFiles.push({ relativePath, reason: unsupportedReason });
         continue;
       }
 
       const stat = await fs.stat(fullPath);
-      if (stat.size > MAX_FILE_BYTES) {
+      if (stat.size > maxFileBytes) {
         skippedFiles.push({
           relativePath,
-          reason: `file exceeds ${MAX_FILE_BYTES} byte V1 ingestion limit`,
+          reason: `file exceeds ${maxFileBytes} byte ingestion limit`,
         });
         continue;
       }
 
-      if (totalChars >= MAX_TOTAL_CHARS) {
+      if (totalChars >= maxTotalChars) {
         skippedFiles.push({
           relativePath,
-          reason: `workspace context reached ${MAX_TOTAL_CHARS} character V1 ingestion limit`,
+          reason: `workspace context reached ${maxTotalChars} character ingestion limit`,
         });
         continue;
       }
 
       const raw = await fs.readFile(fullPath, "utf8");
-      const remainingChars = MAX_TOTAL_CHARS - totalChars;
+      const remainingChars = maxTotalChars - totalChars;
       const content =
         raw.length > remainingChars
           ? `${raw.slice(0, remainingChars)}\n\n[Truncated by Pantheon context budget.]`
@@ -111,7 +156,7 @@ export async function buildWorkspaceContext(workspaceDir: string): Promise<Works
   }
 
   await walk(workspaceDir);
-  return { workspaceDir, supportedFiles, skippedFiles, unsupportedFiles, totalBytes, totalChars };
+  return { supportedFiles, skippedFiles, unsupportedFiles, totalBytes, totalChars };
 }
 
 export function makeWorkspaceOutputPaths(workspaceDir: string, stamp: string): WorkspaceOutputPaths {
@@ -191,12 +236,24 @@ ${inventory}
 ${contents}`;
 }
 
+/**
+ * Filenames that are generated as scratch/debug dumps during a run and must
+ * not be mirrored into the clean `latest/` folder. Covers `raw-output.md`,
+ * `raw-output-<artifact>.md`, and `raw-output-<provider>-error.md`.
+ */
+function isMirrorableArtifact(filename: string): boolean {
+  if (!filename.endsWith(".md")) return false;
+  if (filename === "raw-output.md" || filename.startsWith("raw-output-")) return false;
+  if (filename === "evidence-cards-summary.md") return false;
+  return true;
+}
+
 export async function mirrorRunToLatest(runDir: string, latestDir: string): Promise<void> {
   await fs.rm(latestDir, { recursive: true, force: true });
   await fs.mkdir(latestDir, { recursive: true });
   const entries = await fs.readdir(runDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    if (!entry.isFile() || !isMirrorableArtifact(entry.name)) continue;
     await fs.copyFile(path.join(runDir, entry.name), path.join(latestDir, entry.name));
   }
 }

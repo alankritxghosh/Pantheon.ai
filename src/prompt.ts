@@ -90,3 +90,118 @@ If you cannot satisfy these floors because the model/provider is weak or context
 - You do not stop at "here's a framework" — you fill it in with the real content.
 
 Now read the user's brief and begin.`;
+
+export const SINGLE_ARTIFACT_SYSTEM_PROMPT = `You are Pantheon, a senior AI product manager writing one grounded Markdown artifact for a local folder-native run.
+
+Follow the artifact-specific task exactly. Use workspace evidence, cite local files when instructed, label assumptions and evidence gaps, write concrete product/technical content, and emit only the requested artifact block.`;
+
+import type { GlobalStyle } from "./style/style-profile.js";
+
+/**
+ * Mechanically checkable citation format for folder-native runs. The post-run
+ * citation-resolution pass (src/citations.ts) scans for exactly this pattern.
+ */
+export const CITATION_INSTRUCTION = `Cite workspace evidence inline as \`[source: <relative-path>]\`, where <relative-path> exactly matches a file path shown in the workspace context (for example: \`[source: support-data/escalations-log.log]\`). Do not use bare \`(#)\` links, invented URLs, or \`[source](url)\` for folder-native runs. If a claim has no workspace source, label it Inference, Assumption, or Evidence gap instead of citing it.`;
+
+export interface ArtifactStylePromptContext {
+  /**
+   * "full" — an exact-slug match: override section structure AND apply
+   * voice/length/diagram/code signals, with retrieved examples.
+   * "global" — no exact-slug match: apply only the generalizable
+   * voice/length/diagram/code signals; keep the artifact's default sections.
+   */
+  mode: "full" | "global";
+  sections: string[];
+  signals: GlobalStyle;
+  examples: Array<{ path: string; preview: string }>;
+}
+
+function describeStyleSignals(signals: GlobalStyle): string {
+  const lines: string[] = [];
+
+  if (signals.voice.firstPersonRatio >= 0.3) {
+    lines.push("- Voice: first-person and direct (the team writes \"we\" / \"our\").");
+  } else if (signals.voice.firstPersonRatio <= 0.1) {
+    lines.push("- Voice: impersonal and third-person; avoid \"we\" / \"I\".");
+  } else {
+    lines.push("- Voice: a measured mix of first-person and impersonal phrasing.");
+  }
+
+  if (signals.voice.passiveVoiceRatio <= 0.05) {
+    lines.push("- Sentences: active voice; avoid passive constructions.");
+  } else if (signals.voice.passiveVoiceRatio >= 0.2) {
+    lines.push("- Sentences: passive voice is acceptable in this team's docs.");
+  }
+
+  if (signals.voice.hedgingDensity <= 0.05) {
+    lines.push("- Claims: direct and declarative; minimal hedging.");
+  } else if (signals.voice.hedgingDensity >= 0.2) {
+    lines.push("- Claims: hedged and qualified (\"likely\", \"may\", \"appears\").");
+  }
+
+  if (signals.avgWordsTotal > 0) {
+    lines.push(`- Length tendency: aim for roughly ${Math.round(signals.avgWordsTotal)} words total.`);
+  }
+
+  const diagram: Record<GlobalStyle["diagramConvention"], string> = {
+    mermaid: "- Diagrams: use Mermaid fenced blocks when a diagram helps.",
+    ascii: "- Diagrams: use ASCII diagrams when a diagram helps.",
+    "image-ref": "- Diagrams: reference images rather than inlining diagrams.",
+    none: "- Diagrams: this team writes prose, not diagrams.",
+  };
+  lines.push(diagram[signals.diagramConvention]);
+
+  const code: Record<GlobalStyle["codeBlockDensity"], string> = {
+    high: "- Code blocks: dense — this team uses many fenced code/spec blocks.",
+    medium: "- Code blocks: moderate use of fenced code/spec blocks.",
+    low: "- Code blocks: sparing use of fenced code blocks.",
+    none: "- Code blocks: prose only; this team rarely uses code blocks.",
+  };
+  lines.push(code[signals.codeBlockDensity]);
+
+  return lines.join("\n");
+}
+
+export function buildStyleRequirementsBlock(styleContext: ArtifactStylePromptContext | null): string {
+  if (!styleContext) {
+    return "";
+  }
+
+  const signals = describeStyleSignals(styleContext.signals);
+
+  if (styleContext.mode === "global") {
+    return `STYLE REQUIREMENTS (instructions — do not reproduce this block in the artifact)
+
+Match this team's general writing style. Keep this artifact's own default section structure — only the writing voice, length tendency, diagram convention, and code-block density below should be matched:
+
+${signals}
+
+`;
+  }
+
+  const examples = styleContext.examples
+    .map((example, index) => {
+      return `Example ${index + 1} (from ${example.path}):
+
+\`\`\`markdown
+${example.preview}
+\`\`\``;
+    })
+    .join("\n\n");
+
+  return `STYLE REQUIREMENTS (instructions — do not reproduce this block in the artifact)
+
+Your output MUST match this team's writing style: section structure, voice, length conventions, and depth of the examples below from their existing docs.
+
+Required section structure (in order):
+${styleContext.sections.map((section) => `- ${section}`).join("\n")}
+
+Writing style to match:
+${signals}
+
+${examples || "No style examples were retrieved for this artifact."}
+
+Use the examples only as a style reference. Do not copy example content into the artifact, and do not add any footer or note referencing the style profile or these instructions.
+
+`;
+}

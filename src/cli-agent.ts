@@ -2,8 +2,8 @@ import { spawn } from "child_process";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { parseArtifactBlocks } from "./artifact-blocks.js";
-import { SYSTEM_PROMPT } from "./prompt.js";
+import { normalizeArtifactContent, parseArtifactBlocks, recoverSingleArtifactContent } from "./artifact-blocks.js";
+import { SINGLE_ARTIFACT_SYSTEM_PROMPT, SYSTEM_PROMPT } from "./prompt.js";
 import type { ToolContext } from "./tools.js";
 import { isFlatMarkdownFilename } from "./validator.js";
 
@@ -95,7 +95,7 @@ export async function runCliAgent(brief: string, ctx: CliContext): Promise<CliRu
       continue;
     }
     const filepath = path.join(ctx.workdir, filename);
-    await fs.writeFile(filepath, artifact.content.trimStart(), "utf8");
+    await fs.writeFile(filepath, normalizeArtifactContent(artifact.content), "utf8");
     console.error(`[pantheon] saved ${filename}`);
   }
 
@@ -137,6 +137,12 @@ export async function runCliArtifact(
 
   const artifacts = parseArtifactBlocks(output.stdout);
   if (artifacts.length === 0) {
+    const recovered = recoverSingleArtifactContent(output.stdout);
+    if (recovered) {
+      await fs.writeFile(path.join(ctx.workdir, expectedFilename), recovered, "utf8");
+      console.error(`[pantheon] recovered ${expectedFilename} from raw CLI output`);
+      return { saved: true, invalidArtifactNames: [], extraArtifactNames: [] };
+    }
     await preserveRawOutput(ctx.workdir, output.stdout, output.stderr, `raw-output-${expectedFilename}`);
     console.error(
       `[pantheon] no artifact block found for ${expectedFilename}; saved raw CLI output`,
@@ -163,7 +169,7 @@ export async function runCliArtifact(
       continue;
     }
 
-    await fs.writeFile(path.join(ctx.workdir, filename), artifact.content.trimStart(), "utf8");
+    await fs.writeFile(path.join(ctx.workdir, filename), normalizeArtifactContent(artifact.content), "utf8");
     console.error(`[pantheon] saved ${filename}`);
     saved = true;
   }
@@ -199,7 +205,7 @@ ${brief}`;
 
 function buildSingleArtifactCliPrompt(prompt: string, expectedFilename: string): string {
   const runDate = new Date().toISOString().slice(0, 10);
-  return `${SYSTEM_PROMPT}
+  return `${SINGLE_ARTIFACT_SYSTEM_PROMPT}
 
 # CLI single-artifact adapter instructions
 

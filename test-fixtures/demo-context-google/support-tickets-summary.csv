@@ -1,0 +1,11 @@
+ticket_subject,frequency,customer_segment,notes
+"Connected GitHub but no digest appeared",18,"trial","Workspace connected successfully but no first batch was configured"
+"First digest included too many old pull requests",11,"trial","Users want caps and better grouping on initial run"
+"Need workspace data export for security review",9,"business","Procurement asks for export before pilot approval"
+"Owner assigned to wrong engineer",8,"team","Ownership inference based on last commenter is often wrong"
+"Can we preview a batch before scheduling?",7,"trial","Common request during onboarding calls"
+"Flaky tests create duplicate tasks",6,"team","Failures need grouping by test name and branch"
+"How does pricing scale with batch runs?",6,"trial","Pricing page does not explain usage model clearly"
+"Slack digest was sent to wrong channel",5,"team","Channel selection defaults are unclear"
+"Need read-only GitHub permission explanation",4,"business","Security reviewers want exact permission rationale"
+"Can managers invite teammates after first digest?",3,"trial","Users are unsure when collaboration starts"

@@ -1,7 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
-import { parseArtifactBlocks } from "./artifact-blocks.js";
-import { SYSTEM_PROMPT } from "./prompt.js";
+import { normalizeArtifactContent, parseArtifactBlocks, recoverSingleArtifactContent } from "./artifact-blocks.js";
+import { postOllamaJsonStream, type OllamaTransportError } from "./ollama/http-client.js";
+import { SINGLE_ARTIFACT_SYSTEM_PROMPT, SYSTEM_PROMPT } from "./prompt.js";
 import type { ToolContext } from "./tools.js";
 import { isFlatMarkdownFilename } from "./validator.js";
 
@@ -17,14 +18,6 @@ export interface OllamaArtifactResult {
   saved: boolean;
   invalidArtifactNames: string[];
   extraArtifactNames: string[];
-}
-
-interface OllamaResponse {
-  message?: {
-    content?: string;
-  };
-  response?: string;
-  error?: string;
 }
 
 export async function runOllamaAgent(brief: string, ctx: OllamaContext): Promise<OllamaRunResult> {
@@ -44,7 +37,7 @@ export async function runOllamaAgent(brief: string, ctx: OllamaContext): Promise
       console.error(`[pantheon] rejected invalid artifact filename: ${artifact.filename}`);
       continue;
     }
-    await fs.writeFile(path.join(ctx.workdir, filename), artifact.content.trimStart(), "utf8");
+    await fs.writeFile(path.join(ctx.workdir, filename), normalizeArtifactContent(artifact.content), "utf8");
     console.error(`[pantheon] saved ${filename}`);
   }
 
@@ -59,6 +52,12 @@ export async function runOllamaArtifact(
   const output = await runOllama(buildSingleArtifactOllamaPrompt(prompt, expectedFilename), ctx);
   const artifacts = parseArtifactBlocks(output);
   if (artifacts.length === 0) {
+    const recovered = recoverSingleArtifactContent(output);
+    if (recovered) {
+      await fs.writeFile(path.join(ctx.workdir, expectedFilename), recovered, "utf8");
+      console.error(`[pantheon] recovered ${expectedFilename} from raw Ollama output`);
+      return { saved: true, invalidArtifactNames: [], extraArtifactNames: [] };
+    }
     await preserveRawOutput(ctx.workdir, output, `raw-output-${expectedFilename}`);
     console.error(`[pantheon] no artifact block found for ${expectedFilename}; saved raw Ollama output`);
     return { saved: false, invalidArtifactNames: [], extraArtifactNames: [] };
@@ -83,7 +82,7 @@ export async function runOllamaArtifact(
       continue;
     }
 
-    await fs.writeFile(path.join(ctx.workdir, filename), artifact.content.trimStart(), "utf8");
+    await fs.writeFile(path.join(ctx.workdir, filename), normalizeArtifactContent(artifact.content), "utf8");
     console.error(`[pantheon] saved ${filename}`);
     saved = true;
   }
@@ -94,53 +93,101 @@ export async function runOllamaArtifact(
 async function runOllama(prompt: string, ctx: OllamaContext): Promise<string> {
   const baseUrl = (process.env.OLLAMA_BASE_URL ?? "http://localhost:11434").replace(/\/$/, "");
   const model = ctx.model;
+  const numCtx = ollamaNumCtx();
+  const callTimeoutMs = ollamaCallTimeoutMs();
+  const firstTokenTimeoutMs = ollamaFirstTokenTimeoutMs();
 
   await ensureOllamaReachable(baseUrl);
   await ensureOllamaModel(baseUrl, model);
 
-  console.error(`[pantheon] ollama model: ${model} (${baseUrl})`);
+  console.error(
+    `[pantheon] ollama model: ${model} (${baseUrl}, num_ctx=${numCtx}, timeout_ms=${callTimeoutMs}, first_token_timeout_ms=${firstTokenTimeoutMs})`,
+  );
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-
-  let response: Response;
   try {
-    response = await fetch(`${baseUrl}/api/chat`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
+    const result = await postOllamaJsonStreamWithRetry(
+      baseUrl,
+      "/api/chat",
+      {
         model,
-        stream: false,
+        stream: true,
+        options: { num_ctx: numCtx },
         messages: [{ role: "user", content: prompt }],
-      }),
-    });
+      },
+      { timeoutMs: callTimeoutMs, firstTokenTimeoutMs },
+    );
+    return result.content;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await preserveRawOutput(ctx.workdir, "", "raw-output-ollama-error", message);
+    const raw = isOllamaTransportError(error) ? error.raw : "";
+    await preserveRawOutput(ctx.workdir, raw, "raw-output-ollama-error", message);
     throw new Error(
       `Ollama request failed. Make sure Ollama is running and the model is available: ${message}`,
     );
   }
+}
 
-  const text = await response.text();
-  if (!response.ok) {
-    await preserveRawOutput(ctx.workdir, text, "raw-output-ollama-error");
-    throw new Error(`Ollama request failed with HTTP ${response.status}: ${text.slice(0, 500)}`);
+function ollamaNumCtx(): number {
+  const raw = process.env.PANTHEON_OLLAMA_NUM_CTX ?? process.env.OLLAMA_NUM_CTX ?? "";
+  const parsed = raw ? Number(raw) : 16_384;
+  if (Number.isFinite(parsed) && parsed >= 4_096) {
+    return Math.floor(parsed);
   }
+  return 16_384;
+}
 
-  let json: OllamaResponse;
-  try {
-    json = JSON.parse(text) as OllamaResponse;
-  } catch {
-    await preserveRawOutput(ctx.workdir, text, "raw-output-ollama-error");
-    throw new Error("Ollama returned non-JSON output.");
+function ollamaCallTimeoutMs(): number {
+  const raw = process.env.PANTHEON_OLLAMA_CALL_TIMEOUT_MS ?? "";
+  const parsed = raw ? Number(raw) : 900_000;
+  if (Number.isFinite(parsed) && parsed >= 30_000) {
+    return Math.floor(parsed);
   }
+  return 900_000;
+}
 
-  if (json.error) {
-    await preserveRawOutput(ctx.workdir, text, "raw-output-ollama-error");
-    throw new Error(`Ollama model error: ${json.error}`);
+function ollamaFirstTokenTimeoutMs(): number {
+  const raw = process.env.PANTHEON_OLLAMA_FIRST_TOKEN_TIMEOUT_MS ?? "";
+  const parsed = raw ? Number(raw) : 360_000;
+  if (Number.isFinite(parsed) && parsed >= 10_000) {
+    return Math.floor(parsed);
   }
+  return 360_000;
+}
 
-  return json.message?.content ?? json.response ?? "";
+async function postOllamaJsonStreamWithRetry(
+  baseUrl: string,
+  pathName: string,
+  payload: unknown,
+  options: { timeoutMs: number; firstTokenTimeoutMs: number },
+): Promise<{ content: string; raw: string }> {
+  const attempts = 2;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await postOllamaJsonStream(baseUrl, pathName, payload, {
+        ...options,
+        onLog: (message) => console.error(`[pantheon] ${message}`),
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts && shouldRetryOllamaTransport(error)) {
+        console.error(`[pantheon] ollama chat request failed; retrying (${attempt + 1}/${attempts}): ${error instanceof Error ? error.message : String(error)}`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
+function shouldRetryOllamaTransport(error: unknown): boolean {
+  if (!isOllamaTransportError(error)) return true;
+  return error.code === "connection" && !error.raw;
+}
+
+function isOllamaTransportError(error: unknown): error is OllamaTransportError {
+  return error instanceof Error && error.name === "OllamaTransportError";
 }
 
 async function ensureOllamaReachable(baseUrl: string): Promise<void> {
@@ -263,7 +310,7 @@ ${brief}`;
 
 function buildSingleArtifactOllamaPrompt(prompt: string, expectedFilename: string): string {
   const runDate = new Date().toISOString().slice(0, 10);
-  return `${SYSTEM_PROMPT}
+  return `${SINGLE_ARTIFACT_SYSTEM_PROMPT}
 
 # Ollama single-artifact adapter instructions
 

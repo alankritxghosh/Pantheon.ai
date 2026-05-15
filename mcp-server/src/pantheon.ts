@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { appendProgress, updateRun } from "./runs.js";
 import type { ArtifactSummary, RunState, ValidationSummary } from "./types.js";
 
@@ -29,6 +30,69 @@ function resolvePantheonBinary(): { command: string; args: string[] } {
   }
   // Fall back to `pantheon` on PATH (requires `npm link` from main package)
   return { command: "pantheon", args: [] };
+}
+
+export async function runPantheonLearnStyle(
+  inputDir: string,
+  workdir: string,
+  company?: string,
+): Promise<{ stderr: string; stdout: string }> {
+  const directResult = await runPantheonLearnStyleDirect(inputDir, workdir, company);
+  if (directResult) {
+    return directResult;
+  }
+
+  const { command, args: binArgs } = resolvePantheonBinary();
+  const args = [...binArgs, "learn-style", inputDir];
+  if (company) {
+    args.push("--company", company);
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: workdir,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(new Error(`pantheon learn-style failed with exit code ${code ?? -1}\n${stderr || stdout}`.trim()));
+    });
+  });
+}
+
+async function runPantheonLearnStyleDirect(
+  inputDir: string,
+  workdir: string,
+  company?: string,
+): Promise<{ stderr: string; stdout: string } | null> {
+  const envBin = process.env.PANTHEON_MCP_BIN;
+  if (!envBin) {
+    return null;
+  }
+
+  const learnStyleModulePath = path.join(path.dirname(envBin), "style", "learn-style.js");
+  const module = await import(pathToFileURL(learnStyleModulePath).href) as {
+    learnStyle: (inputDir: string, workdir: string, options?: { company?: string }) => Promise<unknown>;
+  };
+  await module.learnStyle(inputDir, workdir, company ? { company } : {});
+  return {
+    stdout: "",
+    stderr: `[pantheon-mcp] learn-style: called ${learnStyleModulePath}`,
+  };
 }
 
 export function startPantheonRun(state: RunState, extraArgs: string[]): void {

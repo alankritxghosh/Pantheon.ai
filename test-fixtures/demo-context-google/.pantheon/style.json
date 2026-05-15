@@ -1,0 +1,36 @@
+{
+  "extractedAt": "2026-05-13T20:14:04.907Z",
+  "sourceDocs": [
+    "01-design-doc-ranker-shadow-traffic.md",
+    "02-design-doc-canary-deploy-orchestrator.md",
+    "03-design-doc-multi-region-cache-invalidation.md",
+    "04-design-doc-bidirectional-streaming-protocol.md"
+  ],
+  "artifactStyles": {
+    "system-design": {
+      "sections": [
+        "Background",
+        "Goals",
+        "Non-Goals",
+        "Overview",
+        "Detailed Design",
+        "Alternatives Considered"
+      ],
+      "avgWordsPerSection": 173.26,
+      "avgWordsTotal": 1078.5,
+      "voice": {
+        "firstPersonRatio": 0.26,
+        "passiveVoiceRatio": 0.07,
+        "hedgingDensity": 0.05
+      },
+      "diagramConvention": "mermaid",
+      "codeBlockDensity": "medium",
+      "examples": [
+        "01-design-doc-ranker-shadow-traffic.md",
+        "02-design-doc-canary-deploy-orchestrator.md",
+        "03-design-doc-multi-region-cache-invalidation.md",
+        "04-design-doc-bidirectional-streaming-protocol.md"
+      ]
+    }
+  }
+}

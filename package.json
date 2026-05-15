@@ -1,9 +1,36 @@
 {
   "name": "pantheon-agent",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "An open-source agentic AI Product Manager. Researches, deconstructs products, writes PRDs, designs systems, plans evals, and produces decision packets.",
   "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alankritxghosh/Pantheon.ai.git"
+  },
+  "homepage": "https://github.com/alankritxghosh/Pantheon.ai#readme",
+  "bugs": {
+    "url": "https://github.com/alankritxghosh/Pantheon.ai/issues"
+  },
+  "keywords": [
+    "pantheon",
+    "prd",
+    "system-design",
+    "ai",
+    "mcp",
+    "cli",
+    "llm"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "DEMO.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "pantheon": "./dist/index.js"
   },
@@ -11,7 +38,11 @@
     "prepare": "npm run build",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:unit": "npm run build && node --test test/*.mjs",
+    "test:e2e": "npm run build && node --test test/e2e/*.mjs",
+    "test:all": "npm run typecheck && npm run test:unit && npm run test:e2e",
+    "test": "npm run test:all"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
