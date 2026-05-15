@@ -1,0 +1,36 @@
+{
+  "extractedAt": "2026-05-13T20:13:55.916Z",
+  "sourceDocs": [
+    "01-tenets-revision-grocery-delivery.md",
+    "02-prfaq-warehouse-robotics-tier.md",
+    "03-business-review-q3-pantry-restock.md",
+    "04-narrative-customer-onboarding-redesign.md"
+  ],
+  "artifactStyles": {
+    "product-vision": {
+      "sections": [
+        "Problem Statement",
+        "Tenets",
+        "Customer Experience",
+        "Working Backwards",
+        "FAQs",
+        "Appendix"
+      ],
+      "avgWordsPerSection": 139.58,
+      "avgWordsTotal": 837.5,
+      "voice": {
+        "firstPersonRatio": 0.7,
+        "passiveVoiceRatio": 0.09,
+        "hedgingDensity": 0.29
+      },
+      "diagramConvention": "none",
+      "codeBlockDensity": "none",
+      "examples": [
+        "01-tenets-revision-grocery-delivery.md",
+        "02-prfaq-warehouse-robotics-tier.md",
+        "03-business-review-q3-pantry-restock.md",
+        "04-narrative-customer-onboarding-redesign.md"
+      ]
+    }
+  }
+}

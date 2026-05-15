@@ -2,11 +2,36 @@ import type { STANDARD_PACKET_ARTIFACTS } from "./validator.js";
 
 export type StandardArtifact = (typeof STANDARD_PACKET_ARTIFACTS)[number];
 
+export type PipelineMode = "full" | "synthesize";
+
 export interface ArtifactSpec {
   filename: StandardArtifact;
   purpose: string;
   requiredSections: string[];
   dependencies: StandardArtifact[];
+  synthesizeMode?: {
+    requiredSections: string[];
+  };
+}
+
+export const SYNTHESIZE_ARTIFACTS: StandardArtifact[] = [
+  "evidence-ledger.md",
+  "product-vision.md",
+  "competitive-deconstruction.md",
+  "opportunity-scorecard.md",
+];
+
+export function specForMode(spec: ArtifactSpec, mode: PipelineMode): ArtifactSpec {
+  if (mode === "synthesize" && spec.synthesizeMode) {
+    return { ...spec, requiredSections: spec.synthesizeMode.requiredSections };
+  }
+  return spec;
+}
+
+export function filterSpecsForMode(specs: ArtifactSpec[], mode: PipelineMode): ArtifactSpec[] {
+  if (mode === "full") return specs;
+  const wanted = new Set<StandardArtifact>(SYNTHESIZE_ARTIFACTS);
+  return specs.filter((spec) => wanted.has(spec.filename)).map((spec) => specForMode(spec, mode));
 }
 
 export const ARTIFACT_SPECS: ArtifactSpec[] = [
@@ -26,6 +51,9 @@ export const ARTIFACT_SPECS: ArtifactSpec[] = [
     purpose: "Define the product thesis, ICP, wedge, principles, and non-directions.",
     requiredSections: ["Thesis", "ICP", "Wedge", "Why now", "Differentiation", "Principles", "Non-directions"],
     dependencies: ["evidence-ledger.md"],
+    synthesizeMode: {
+      requiredSections: ["Thesis", "ICP", "Wedge"],
+    },
   },
   {
     filename: "user-personas-jtbd.md",
@@ -38,6 +66,9 @@ export const ARTIFACT_SPECS: ArtifactSpec[] = [
     purpose: "Compare practical alternatives and extract implications for Pantheon.",
     requiredSections: ["Alternatives", "Strengths", "Weaknesses", "Why users choose them", "Why they fail", "Implications"],
     dependencies: ["evidence-ledger.md", "product-vision.md"],
+    synthesizeMode: {
+      requiredSections: ["Alternatives", "Implications"],
+    },
   },
   {
     filename: "opportunity-scorecard.md",
@@ -127,3 +158,10 @@ export const ARTIFACT_SPECS: ArtifactSpec[] = [
     ],
   },
 ];
+
+export function overrideRequiredSections(spec: ArtifactSpec, newSections: string[]): ArtifactSpec {
+  return {
+    ...spec,
+    requiredSections: newSections,
+  };
+}

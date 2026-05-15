@@ -1,6 +1,6 @@
 {
   "name": "@pantheon/mcp",
-  "version": "0.1.0",
+  "version": "3.0.0",
   "description": "MCP server for Pantheon — exposes Pantheon as tools inside Claude Code and other MCP clients.",
   "license": "MIT",
   "type": "module",
@@ -11,7 +11,11 @@
     "prepare": "npm run build",
     "build": "tsc && chmod +x dist/index.js",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test:unit": "npm run build && node --test test/*.mjs",
+    "test:e2e": "npm run build && node --test test/e2e/*.mjs",
+    "test:all": "npm run typecheck && npm run test:unit && npm run test:e2e",
+    "test": "npm run test:all"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

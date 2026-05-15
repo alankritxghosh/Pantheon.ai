@@ -3,21 +3,27 @@ import "./env.js";
 import fs from "fs/promises";
 import path from "path";
 import { runAgent } from "./agent.js";
+import { writeRunMetrics, type RunMetric } from "./briefs/briefs.js";
 import { runCliAgent, type CliProvider } from "./cli-agent.js";
 import { modelAliasesForHelp, resolveModel, type Provider } from "./models.js";
-import { runNvidiaAgent } from "./nvidia-agent.js";
 import { runOllamaAgent } from "./ollama-agent.js";
-import { rescueFailedArtifacts, runArtifactPipeline } from "./pipeline.js";
-import { validateRunFolder, writeValidationAwareQualityReport } from "./validator.js";
+import { formatDoctorReport, runDoctor } from "./health/doctor.js";
+import { regenerateQualityReport, rescueFailedArtifacts, runArtifactPipeline, runSynthesizePipeline } from "./pipeline.js";
+import { SYNTHESIZE_ARTIFACTS } from "./artifacts.js";
+import { parseOpportunityScorecard, renderTopN } from "./cli-output/synthesize-summary.js";
+import { learnStyle } from "./style/learn-style.js";
+import { runCitationAudit, writeCitationsReport } from "./citations.js";
+import { STANDARD_PACKET_ARTIFACTS, validateRunFolder, writeValidationAwareQualityReport } from "./validator.js";
 import {
   buildWorkspaceContext,
   buildWorkspaceRunBrief,
   makeWorkspaceOutputPaths,
   mirrorRunToLatest,
   renderDeterministicContextSummary,
+  type WorkspaceContext,
 } from "./workspace.js";
 
-type Mode = "freeform" | "packet" | "critique" | "run";
+type Mode = "freeform" | "packet" | "critique" | "run" | "learn-style" | "doctor" | "synthesize";
 
 interface ParsedArgs {
   mode: Mode;
@@ -26,16 +32,21 @@ interface ParsedArgs {
   provider: Provider | "";
   model: string;
   targetDir: string;
+  company: string;
+  embedProvider: string;
+  topN: number;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2);
   let workdir = "";
-  const envProvider = process.env.PANTHEON_PROVIDER ?? "";
-  let provider: Provider | "" = envProvider ? normalizeProvider(envProvider) : "";
+  let providerInput = process.env.PANTHEON_PROVIDER ?? "";
   let model = "";
   let mode: Mode = "freeform";
   let targetDir = "";
+  let company = "";
+  let embedProvider = process.env.PANTHEON_EMBED_PROVIDER ?? "";
+  let topN = 3;
   const briefParts: string[] = [];
   let sawCommand = false;
 
@@ -44,25 +55,45 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (a === "--out" || a === "-o") {
       workdir = args[++i] ?? "";
     } else if (a === "--provider" || a === "-p") {
-      provider = normalizeProvider(args[++i] ?? "");
+      providerInput = args[++i] ?? "";
     } else if (a === "--model" || a === "-m") {
       model = args[++i] ?? "";
     } else if (a === "--brief-file" || a === "-f") {
       briefParts.push(`@FILE:${args[++i]}`);
+    } else if (a === "--company") {
+      company = args[++i] ?? "";
+    } else if (a === "--embed-provider") {
+      embedProvider = args[++i] ?? "";
+    } else if (a === "--top") {
+      const raw = args[++i] ?? "";
+      const parsed = Number.parseInt(raw, 10);
+      if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 10) {
+        throw new Error(`--top expects an integer between 1 and 10; got "${raw}"`);
+      }
+      topN = parsed;
     } else if (a === "--help" || a === "-h") {
       printHelp();
       process.exit(0);
-    } else if (!sawCommand && (a === "packet" || a === "critique" || a === "run")) {
+    } else if (
+      !sawCommand &&
+      (a === "packet" ||
+        a === "critique" ||
+        a === "run" ||
+        a === "learn-style" ||
+        a === "doctor" ||
+        a === "synthesize")
+    ) {
       sawCommand = true;
       mode = a;
-    } else if (mode === "critique" && !targetDir) {
+    } else if ((mode === "critique" || mode === "learn-style" || mode === "synthesize") && !targetDir) {
       targetDir = a;
     } else {
       briefParts.push(a);
     }
   }
 
-  return { mode, brief: briefParts.join(" "), workdir, provider, model, targetDir };
+  const provider = providerInput ? normalizeProvider(providerInput) : "";
+  return { mode, brief: briefParts.join(" "), workdir, provider, model, targetDir, company, embedProvider, topN };
 }
 
 function normalizeProvider(value: string): Provider {
@@ -82,13 +113,11 @@ function normalizeProvider(value: string): Provider {
       return "gemini-cli";
     case "ollama":
       return "ollama";
-    case "glm":
-    case "nvidia":
-    case "nvidia-api":
-      return "nvidia";
+    case "fixture":
+      return "fixture";
     default:
       throw new Error(
-        `Unknown provider "${value}". Use anthropic, claude-cli, openai-cli, gemini-cli, ollama, or nvidia.`,
+        `Unknown provider "${value}". Use anthropic, claude-cli, openai-cli, gemini-cli, ollama, or fixture.`,
       );
   }
 }
@@ -98,6 +127,7 @@ function printHelp() {
 
 Usage:
   pantheon run [--model <alias-or-id>] [--provider <provider>]
+  pantheon learn-style <dir> [--company <name>]
   pantheon "<brief>" [--out <dir>] [--model <alias-or-id>] [--provider <provider>]
   pantheon --brief-file <path> [--out <dir>] [--model <alias-or-id>] [--provider <provider>]
   pantheon packet "<product/topic>" [--out <dir>] [--model <alias-or-id>] [--provider <provider>]
@@ -109,6 +139,7 @@ Primary folder-native workflow:
   pantheon run
   pantheon run --model fast
   pantheon run --model best
+  pantheon learn-style ./style-samples --company "Acme"
 
 Pantheon treats the current folder as context and writes outputs to:
 
@@ -125,18 +156,17 @@ Advanced brief-based examples:
   pantheon --provider openai-cli "Turn this idea into a decision packet."
   pantheon packet "Cursor for Product Managers" -o ./runs/cursor-for-pms
   pantheon critique ./runs/cursor-for-pms
+  pantheon learn-style ./style-samples --company "Acme"
 
 Output:
   pantheon run writes Markdown artifacts into ./pantheon-output/.
   Brief and packet modes write Markdown artifacts into --out (default: ./runs/<timestamp>).
 
 Env:
-  PANTHEON_PROVIDER  optional default provider: anthropic, claude-cli, openai-cli, gemini-cli, ollama, nvidia (default: ollama)
+  PANTHEON_PROVIDER  optional default provider: anthropic, claude-cli, openai-cli, gemini-cli, ollama (default: ollama)
   PANTHEON_MODEL     optional default model or alias
   OLLAMA_BASE_URL    optional Ollama URL, default: http://localhost:11434
   OLLAMA_MODEL       optional model override for provider=ollama
-  NVIDIA_API_KEY     required for provider=nvidia
-  NVIDIA_MODEL       optional model override for provider=nvidia
   ANTHROPIC_API_KEY  required only for provider=anthropic
 
 Model aliases:
@@ -242,7 +272,61 @@ ${sections.join("\n\n---\n\n")}`;
 }
 
 async function main() {
-  const { mode, brief: rawBrief, workdir: workdirArg, provider: providerArg, model: modelArg, targetDir } = parseArgs(process.argv);
+  const {
+    mode,
+    brief: rawBrief,
+    workdir: workdirArg,
+    provider: providerArg,
+    model: modelArg,
+    targetDir,
+    company,
+    embedProvider,
+    topN,
+  } = parseArgs(process.argv);
+
+  if (mode === "doctor") {
+    const resolved = resolveModel(providerArg, modelArg);
+    const report = await runDoctor({
+      provider: resolved.provider,
+      model: resolved.model,
+      embedProvider: embedProvider || undefined,
+    });
+    console.log(formatDoctorReport(report));
+    process.exit(report.allPass ? 0 : 1);
+  }
+
+  if (mode === "learn-style") {
+    if (!targetDir) {
+      console.error("ERROR: learn-style requires a style sample folder, e.g. pantheon learn-style ./style-samples");
+      process.exit(1);
+    }
+    if (rawBrief) {
+      console.error("ERROR: pantheon learn-style takes one folder argument plus optional --company.");
+      process.exit(1);
+    }
+
+    const profile = await learnStyle(targetDir, process.cwd(), company ? { company } : {});
+    console.error(
+      `[pantheon] learn-style: learned ${Object.keys(profile.artifactStyles).length} artifact style${Object.keys(profile.artifactStyles).length === 1 ? "" : "s"}`,
+    );
+    return;
+  }
+
+  if (mode === "synthesize") {
+    if (rawBrief) {
+      console.error("ERROR: pantheon synthesize takes an optional folder path plus --top N. It is not a brief mode.");
+      process.exit(1);
+    }
+    await runSynthesizeMode({
+      workspaceDir: path.resolve(targetDir || process.cwd()),
+      providerArg,
+      modelArg,
+      embedProvider,
+      topN,
+    });
+    return;
+  }
+
   const resolvedModel = resolveModel(providerArg, modelArg);
   const provider = resolvedModel.provider;
   const model = resolvedModel.model;
@@ -267,12 +351,25 @@ async function main() {
     console.error("ERROR: ANTHROPIC_API_KEY not set. Copy .env.example to .env.");
     process.exit(1);
   }
-  if (provider === "nvidia" && !process.env.NVIDIA_API_KEY) {
-    console.error("ERROR: NVIDIA_API_KEY not set. Add it to .env or choose another provider.");
-    process.exit(1);
-  }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const workspaceDir = process.cwd();
+
+  if (mode === "run") {
+    const preflight = await runDoctor({
+      provider,
+      model,
+      embedProvider: embedProvider || undefined,
+      workspaceDir,
+    });
+    if (!preflight.allPass) {
+      console.error(formatDoctorReport(preflight));
+      console.error(
+        "Cannot start pantheon run until the above failures are resolved. Run `pantheon doctor` anytime to re-check.",
+      );
+      process.exit(1);
+    }
+  }
+
   const workspacePaths = mode === "run" ? makeWorkspaceOutputPaths(workspaceDir, stamp) : null;
   const workdir = path.resolve(
     mode === "run"
@@ -285,6 +382,8 @@ async function main() {
 
   const resolvedBrief = await resolveBrief(rawBrief);
   let deterministicContextSummary = "";
+  let runWorkspaceFiles: string[] = [];
+  let runWorkspaceContext: WorkspaceContext | undefined;
   const brief =
     mode === "packet"
       ? buildPacketBrief(resolvedBrief)
@@ -293,6 +392,8 @@ async function main() {
         : mode === "run"
           ? await buildRunBrief(workspaceDir).then((result) => {
               deterministicContextSummary = result.contextSummary;
+              runWorkspaceFiles = result.workspaceFiles;
+              runWorkspaceContext = result.workspaceContext;
               return result.brief;
             })
           : resolvedBrief;
@@ -312,16 +413,15 @@ async function main() {
   console.error("---");
 
   let invalidArtifactNames: string[] = [];
+  let runMetrics: RunMetric[] = [];
   if (mode === "run") {
-    const result = await runArtifactPipeline({ provider, model, workdir, workspaceBrief: brief });
+    const result = await runArtifactPipeline({ provider, model, workdir, workspaceBrief: brief, workspaceContext: runWorkspaceContext });
     invalidArtifactNames = result.invalidArtifactNames;
+    runMetrics = result.metrics;
   } else if (provider === "anthropic") {
     await runAgent(brief, { workdir });
   } else if (provider === "ollama") {
     const result = await runOllamaAgent(brief, { workdir, model });
-    invalidArtifactNames = result.invalidArtifactNames;
-  } else if (provider === "nvidia") {
-    const result = await runNvidiaAgent(brief, { workdir, model });
     invalidArtifactNames = result.invalidArtifactNames;
   } else {
     const result = await runCliAgent(brief, { workdir, provider: provider as CliProvider, model });
@@ -329,22 +429,39 @@ async function main() {
   }
 
   if (mode === "packet" || mode === "critique" || mode === "run") {
+    const validationStart = Date.now();
     let validation = await validateRunFolder(workdir, {
       invalidArtifactNames,
-      allowedExtraMarkdownFiles: mode === "run" ? ["context-summary.md"] : [],
+      allowedExtraMarkdownFiles: mode === "run" ? ["context-summary.md", "evidence-report.md", "evidence-clusters.md", "run-metrics.md"] : [],
     });
+    if (mode === "run") {
+      runMetrics.push(metric("validation", undefined, validationStart, validation.passed ? "pass" : "fail"));
+    }
 
     if (mode === "run" && !validation.passed) {
       const failedChecks = validation.checks.filter((check) => check.failures.length > 0);
       if (failedChecks.length > 0 && failedChecks.length <= 3) {
         const rescue = await rescueFailedArtifacts(
-          { provider, model, workdir, workspaceBrief: brief },
+          { provider, model, workdir, workspaceBrief: brief, workspaceContext: runWorkspaceContext },
           failedChecks,
         );
         invalidArtifactNames = [...new Set([...invalidArtifactNames, ...rescue.invalidArtifactNames])];
         validation = await validateRunFolder(workdir, {
           invalidArtifactNames,
-          allowedExtraMarkdownFiles: ["context-summary.md"],
+          allowedExtraMarkdownFiles: ["context-summary.md", "evidence-report.md", "evidence-clusters.md", "run-metrics.md"],
+        });
+        // The model review inside quality-report.md was generated before this
+        // rescue pass. Regenerate it so it reflects the same post-rescue state
+        // as the deterministic header (otherwise the report contradicts itself).
+        const regenInvalid = await regenerateQualityReport(
+          { provider, model, workdir, workspaceBrief: brief, workspaceContext: runWorkspaceContext },
+          validation.checks,
+          new Set(failedChecks.map((check) => check.filename)),
+        );
+        invalidArtifactNames = [...new Set([...invalidArtifactNames, ...regenInvalid])];
+        validation = await validateRunFolder(workdir, {
+          invalidArtifactNames,
+          allowedExtraMarkdownFiles: ["context-summary.md", "evidence-report.md", "evidence-clusters.md", "run-metrics.md"],
         });
       } else if (failedChecks.length > 3) {
         console.error(`[pantheon] rescue: skipped because ${failedChecks.length} artifacts failed; max final rescue is 3`);
@@ -355,9 +472,19 @@ async function main() {
       await writeValidationAwareQualityReport(workdir, validation);
       validation = await validateRunFolder(workdir, {
         invalidArtifactNames,
-        allowedExtraMarkdownFiles: ["context-summary.md"],
+        allowedExtraMarkdownFiles: ["context-summary.md", "evidence-report.md", "evidence-clusters.md", "run-metrics.md"],
       });
       await writeValidationAwareQualityReport(workdir, validation);
+
+      // Informational citation-resolution pass. Never blocks the run.
+      const citationStart = Date.now();
+      const citationAudit = await runCitationAudit(workdir, STANDARD_PACKET_ARTIFACTS, runWorkspaceFiles);
+      const citationsReportPath = await writeCitationsReport(workdir, citationAudit);
+      runMetrics.push(metric("citations", undefined, citationStart, "pass", `${citationAudit.totalResolved}/${citationAudit.totalCitations} resolved`));
+      console.error(
+        `[pantheon] citations: ${citationAudit.totalCitations} cited, ${citationAudit.totalResolved} resolved, ${citationAudit.totalUnresolved} unresolved, ${citationAudit.totalMalformed} malformed`,
+      );
+      console.error(`[pantheon] citations report: ${citationsReportPath}`);
     }
 
     console.error(
@@ -376,21 +503,125 @@ async function main() {
   }
 
   if (mode === "run" && workspacePaths) {
+    const mirrorStart = Date.now();
     await mirrorRunToLatest(workdir, workspacePaths.latestDir);
+    runMetrics.push(metric("mirror", undefined, mirrorStart, "pass"));
+    await writeRunMetrics(workdir, runMetrics);
+    await fs.copyFile(path.join(workdir, "run-metrics.md"), path.join(workspacePaths.latestDir, "run-metrics.md"));
     console.error(`[pantheon] latest mirror: ${workspacePaths.latestDir}`);
   }
 
   console.error(`---\n[pantheon] artifacts in: ${workdir}`);
 }
 
+interface SynthesizeOptions {
+  workspaceDir: string;
+  providerArg: Provider | "";
+  modelArg: string;
+  embedProvider: string;
+  topN: number;
+}
+
+async function runSynthesizeMode(opts: SynthesizeOptions): Promise<void> {
+  const resolved = resolveModel(opts.providerArg, opts.modelArg);
+  const provider = resolved.provider;
+  const model = resolved.model;
+
+  const workspaceStat = await fs.stat(opts.workspaceDir).catch(() => null);
+  if (!workspaceStat || !workspaceStat.isDirectory()) {
+    console.error(`ERROR: synthesize target is not a directory: ${opts.workspaceDir}`);
+    process.exit(1);
+  }
+
+  const preflight = await runDoctor({
+    provider,
+    model,
+    embedProvider: opts.embedProvider || undefined,
+    workspaceDir: opts.workspaceDir,
+  });
+  if (!preflight.allPass) {
+    console.error(formatDoctorReport(preflight));
+    console.error(
+      "Cannot start pantheon synthesize until the above failures are resolved. Run `pantheon doctor` to re-check.",
+    );
+    process.exit(1);
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const workspacePaths = makeWorkspaceOutputPaths(opts.workspaceDir, stamp);
+  const workdir = path.resolve(workspacePaths.runDir);
+  await fs.mkdir(workdir, { recursive: true });
+
+  const { brief, contextSummary, workspaceContext } = await buildRunBrief(opts.workspaceDir);
+  if (contextSummary) {
+    await fs.writeFile(path.join(workdir, "context-summary.md"), contextSummary, "utf8");
+  }
+
+  console.error("[pantheon] mode: synthesize");
+  console.error(`[pantheon] workspace: ${opts.workspaceDir}`);
+  console.error(`[pantheon] workdir: ${workdir}`);
+  console.error(`[pantheon] provider: ${provider}`);
+  console.error(`[pantheon] model: ${model}${resolved.alias ? ` (${resolved.alias})` : ""}`);
+  console.error(`[pantheon] artifacts: ${SYNTHESIZE_ARTIFACTS.join(", ")}`);
+  console.error("---");
+
+  const synthStart = Date.now();
+  const result = await runSynthesizePipeline({
+    provider,
+    model,
+    workdir,
+    workspaceBrief: brief,
+    workspaceContext,
+  });
+  const runMetrics: RunMetric[] = [...result.metrics];
+
+  let invalidArtifactNames = result.invalidArtifactNames;
+  const validationStart = Date.now();
+  let validation = await validateRunFolder(workdir, {
+    invalidArtifactNames,
+    allowedExtraMarkdownFiles: ["context-summary.md", "evidence-report.md", "evidence-clusters.md", "run-metrics.md"],
+    requiredArtifacts: SYNTHESIZE_ARTIFACTS,
+  });
+  runMetrics.push({
+    phase: "validation",
+    artifact: undefined,
+    durationMs: Date.now() - validationStart,
+    status: validation.passed ? "pass" : "fail",
+  });
+
+  if (!validation.passed) {
+    console.error(
+      `[pantheon] synthesize validation: ${validation.passed ? "pass" : "fail"}; missing=${validation.missingArtifacts.join(", ") || "-"}; shallow=${validation.shallowArtifacts.join(", ") || "-"}`,
+    );
+    console.error(`[pantheon] validation report: ${validation.reportPath}`);
+  } else {
+    console.error(`[pantheon] synthesize validation: pass (${validation.reportPath})`);
+  }
+
+  await mirrorRunToLatest(workdir, workspacePaths.latestDir);
+  await writeRunMetrics(workdir, runMetrics);
+  await fs.copyFile(
+    path.join(workdir, "run-metrics.md"),
+    path.join(workspacePaths.latestDir, "run-metrics.md"),
+  );
+
+  const scorecardPath = path.join(workspacePaths.latestDir, "opportunity-scorecard.md");
+  const scorecard = await fs.readFile(scorecardPath, "utf8").catch(() => "");
+  const ranked = parseOpportunityScorecard(scorecard);
+  console.error(`---\n[pantheon] synthesize complete in ${Math.round((Date.now() - synthStart) / 1000)}s`);
+  console.log(renderTopN(ranked, { topN: opts.topN }));
+}
+
 async function buildRunBrief(
   workspaceDir: string,
-): Promise<{ brief: string; contextSummary: string }> {
+): Promise<{ brief: string; contextSummary: string; workspaceFiles: string[]; workspaceContext: WorkspaceContext }> {
   const workspaceContext = await buildWorkspaceContext(workspaceDir);
   const contextSummary = renderDeterministicContextSummary(workspaceContext);
   return {
     brief: buildWorkspaceRunBrief(workspaceContext),
     contextSummary,
+    workspaceFiles: workspaceContext.supportedFiles.map((file) => file.relativePath),
+    workspaceContext,
   };
 }
 
@@ -398,3 +629,13 @@ main().catch((e) => {
   console.error("FATAL:", e instanceof Error ? e.message : e);
   process.exit(1);
 });
+
+function metric(
+  phase: string,
+  artifact: string | undefined,
+  startedAt: number,
+  status: string,
+  detail?: string,
+): RunMetric {
+  return { phase, artifact, durationMs: Date.now() - startedAt, status, detail };
+}

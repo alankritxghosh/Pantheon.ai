@@ -1,4 +1,4 @@
-export type Provider = "anthropic" | "claude-cli" | "openai-cli" | "gemini-cli" | "ollama" | "nvidia";
+export type Provider = "anthropic" | "claude-cli" | "openai-cli" | "gemini-cli" | "ollama" | "fixture";
 
 export interface ResolvedModel {
   provider: Provider;
@@ -9,12 +9,12 @@ export interface ResolvedModel {
 const MODEL_ALIASES: Record<string, ResolvedModel> = {
   default: {
     provider: "ollama",
-    model: "qwen2.5:14b",
+    model: "qwen3:14b",
     alias: "default",
   },
   local: {
     provider: "ollama",
-    model: "qwen2.5:14b",
+    model: "qwen3:14b",
     alias: "local",
   },
   fast: {
@@ -24,23 +24,13 @@ const MODEL_ALIASES: Record<string, ResolvedModel> = {
   },
   best: {
     provider: "ollama",
-    model: "qwen2.5:32b",
+    model: "qwen3:30b",
     alias: "best",
   },
   flagship: {
     provider: "ollama",
-    model: "qwen2.5:72b",
+    model: "qwen3-coder:30b",
     alias: "flagship",
-  },
-  glm47: {
-    provider: "nvidia",
-    model: "z-ai/glm4.7",
-    alias: "glm47",
-  },
-  "glm-4.7": {
-    provider: "nvidia",
-    model: "z-ai/glm4.7",
-    alias: "glm-4.7",
   },
   gemini: {
     provider: "gemini-cli",
@@ -54,8 +44,8 @@ const PROVIDER_DEFAULT_MODELS: Record<Provider, string> = {
   "claude-cli": "claude-opus-4-7",
   "openai-cli": "gpt-5.5",
   "gemini-cli": "gemini-3.1-pro-preview",
-  ollama: "qwen2.5:14b",
-  nvidia: "z-ai/glm4.7",
+  ollama: "qwen3:14b",
+  fixture: "fixture-stub",
 };
 
 export function resolveModel(provider: Provider | "", requestedModel = ""): ResolvedModel {
@@ -76,9 +66,7 @@ export function resolveModel(provider: Provider | "", requestedModel = ""): Reso
           ? process.env.GEMINI_MODEL
           : resolvedProvider === "ollama"
             ? process.env.OLLAMA_MODEL
-            : resolvedProvider === "nvidia"
-              ? process.env.NVIDIA_MODEL
-              : undefined;
+            : undefined;
 
   return {
     provider: resolvedProvider,

@@ -1,6 +1,6 @@
 export type RunStatus = "pending" | "running" | "completed" | "failed";
 
-export type RunMode = "run" | "packet" | "critique";
+export type RunMode = "run" | "packet" | "critique" | "synthesize";
 
 export interface RunState {
   runId: string;

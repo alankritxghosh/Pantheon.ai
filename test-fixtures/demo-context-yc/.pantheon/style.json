@@ -1,0 +1,35 @@
+{
+  "extractedAt": "2026-05-13T20:14:14.104Z",
+  "sourceDocs": [
+    "01-rfc-trial-extension-policy.md",
+    "02-rfc-pricing-page-iteration.md",
+    "03-rfc-self-serve-onboarding-flow.md",
+    "04-rfc-support-tier-restructure.md",
+    "05-rfc-data-export-feature.md"
+  ],
+  "artifactStyles": {
+    "prd": {
+      "sections": [
+        "Problem",
+        "Proposal",
+        "Open Questions"
+      ],
+      "avgWordsPerSection": 91.87,
+      "avgWordsTotal": 275.6,
+      "voice": {
+        "firstPersonRatio": 1,
+        "passiveVoiceRatio": 0,
+        "hedgingDensity": 0
+      },
+      "diagramConvention": "none",
+      "codeBlockDensity": "none",
+      "examples": [
+        "01-rfc-trial-extension-policy.md",
+        "02-rfc-pricing-page-iteration.md",
+        "03-rfc-self-serve-onboarding-flow.md",
+        "04-rfc-support-tier-restructure.md",
+        "05-rfc-data-export-feature.md"
+      ]
+    }
+  }
+}
